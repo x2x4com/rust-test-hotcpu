@@ -1,16 +1,16 @@
-#![feature(mutex_unlock)]
-extern crate redis;
-use redis::Commands;
+// #![feature(mutex_unlock)]
+// extern crate redis;
+// use redis::Commands;
 // use redis::cmd;
 
-use std::process::{Command, Stdio};
+// use std::process::{Command, Stdio};
 // use threadpool::ThreadPool;
 use tiny_keccak::Sha3;
 use tiny_keccak::Hasher;
 use rand::Rng;
 use std::time::Duration;
 use std::thread::sleep;
-// use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 // ntex
 use std::{env, io};
@@ -19,9 +19,15 @@ use std::{env, io};
 // use ntex::http::{HttpService, Response};
 // use ntex::{server::Server, time::Seconds, util::Ready};
 use ntex::time::Seconds;
-use std::fmt::Write as FmtWrite;
+// use std::fmt::Write as FmtWrite;
 use ntex::http;
-use ntex::web::{self, middleware, App, HttpServer};
+use ntex::web::{self, middleware, App, HttpServer, HttpResponse};
+// use clap::{Parser, Subcommand, ColorChoice, value_parser, Args};
+use clap::{Parser, ColorChoice};
+// use clap::{Parser, Subcommand, ValueEnum};
+use owo_colors::{OwoColorize, Stream};
+// use std::cell::Cell;
+
 
 
 const MAX_RUN: i64 = 1000000000000000000;
@@ -30,25 +36,54 @@ const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                             0123456789)(*&^%$#@!~";
 const PASSWORD_LEN: usize = 10000000;
 // const PASSWORD_LEN: usize = 10000;
-const REDIS_URL: &str = "redis://:111111@127.0.0.1/";
+// const REDIS_URL: &str = "redis://:111111@127.0.0.1/";
 
-// fn task(t: usize, c: Arc<Mutex<i32>>) {
-fn task(t: usize) {
+#[derive(Debug, Parser)]
+#[command(version="1.0", author="Jack Xu")]
+// #[command(setting = AppSettings::ColoredHelp)]
+struct Cli {
+    #[arg(short,long,value_name="Max Run", default_value_t=MAX_RUN)]
+    max_run: i64,
+    #[arg(short,long,value_name="PASSWORD LEN", default_value_t=PASSWORD_LEN)]
+    pass_len: usize,
+    #[arg(short,long,value_name="Reader interval(ms)", default_value_t=1000u64)]
+    interval: u64,
+    #[arg(
+        short,
+        long,
+        require_equals = true,
+        value_name = "WHEN",
+        num_args = 0..=2,
+        default_value_t = ColorChoice::Auto,
+        // default_missing_value = "auto",
+        value_enum
+    )]
+    color: ColorChoice,
+}
 
-    // let mut num = c.lock().unwrap();
+#[derive(Debug, Clone)]
+struct MyState {
+    counter: Arc<Mutex<i32>>,
+}
+
+fn task(t: usize, max_run: i64, pass_len: usize, locker: Arc<Mutex<i32>>) {
+// fn task(t: usize) {
+
+    
     // *num += 1;
     // println!("{}: {}", t, *c.lock().unwrap());
     println!("Start task {}", t);
-    let client = redis::Client::open(REDIS_URL).unwrap();
+    // let client = redis::Client::open(REDIS_URL).unwrap();
     loop {
-        // println!("start task");
-        let mut con = client.get_connection().unwrap();
         let mut n: i64 = 0;
-        while n < MAX_RUN {
+        
+        // let mut con = client.get_connection().unwrap();
+        while n < max_run {
+            // println!("Round {}-{}", t, n);
             // let mut num = c.lock().unwrap();
             // *num += 1;
             n += 1;
-            redis::cmd("INCR").arg("counter").query::<i32>(&mut con).unwrap();
+            // redis::cmd("INCR").arg("counter").query::<i32>(&mut con).unwrap();
             //con.incr(key, delta);
             // continue;
             // Mutex::unlock(num);
@@ -59,7 +94,7 @@ fn task(t: usize) {
             
             let mut rng = rand::thread_rng();
             
-            let password: String = (0..PASSWORD_LEN)
+            let password: String = (0..pass_len)
                 .map(|_| {
                     let idx = rng.gen_range(0..CHARSET.len());
                     CHARSET[idx] as char
@@ -72,17 +107,27 @@ fn task(t: usize) {
             sha3.finalize(&mut output);
             // let l = std::str::from_utf8(&output).unwrap();
             // let mut l = String::new();
-            let l = output.iter().map(|x| format!("{:02x}", x)).collect::<String>();
+            let _l = output.iter().map(|x| format!("{:02x}", x)).collect::<String>();
             // println!("{:#?}", &l);
-            Command::new("echo")
-                .arg(&l)
-                .stdout(Stdio::null())
-                .output()
-                .expect("Failed to execute command");
+            // Command::new("echo")
+            //     .arg(&l)
+            //     .stdout(Stdio::null())
+            //     .output()
+            //     .expect("Failed to execute command");
             n += 1;
+            let mut num = locker.lock().unwrap();
+            *num += 1;
         }
     }
     
+}
+
+async fn http_index(st: web::types::State<MyState>) -> HttpResponse {
+// async fn http_index(st: web::types::State<MyState>) -> i32 {
+    let c = st.counter.lock().unwrap();
+    println!("{}", *c);
+    let s = c.to_string();
+    HttpResponse::Ok().body(s)
 }
 
 #[ntex::main]
@@ -92,24 +137,33 @@ async fn main() -> io::Result<()> {
     println!("System up");
     env_logger::init();
 
+    let args = Cli::parse();
+    // println!("{:?}", args);
+    // init color
+    match args.color {
+        ColorChoice::Always => owo_colors::set_override(true),
+        ColorChoice::Auto => {}
+        ColorChoice::Never => owo_colors::set_override(false),
+    }
+
     // clear data
-    let client = redis::Client::open(REDIS_URL).unwrap();
-    let mut con = client.get_connection().unwrap();
+    // let client = redis::Client::open(REDIS_URL).unwrap();
+    // let mut con = client.get_connection().unwrap();
     //let _rt = con.del("counter").unwrap();
-    println!("clean redis");
-    redis::cmd("DEL").arg("counter").query::<i32>(&mut con).unwrap();
-    drop(con);
-    drop(client);
+    // println!("clean redis");
+    // redis::cmd("DEL").arg("counter").query::<i32>(&mut con).unwrap();
+    // drop(con);
+    // drop(client);
     sleep(Duration::from_secs(1));
 
     let cpus = num_cpus::get();
-    println!("cpu number: {}", cpus);
-    // let counter = Arc::new(Mutex::new(0));
+    println!("cpu number: {}", cpus.if_supports_color(Stream::Stdout, |text| text.red()));
+    let counter = Arc::new(Mutex::new(0));
     let mut handles = vec![];
 
-    for c in "我是谁".chars() {
-        println!("{}", c);
-    }
+    // for c in "我是谁".chars() {
+    //     println!("{}", c);
+    // }
 
     // let pool = ThreadPool::new(cpus);
 
@@ -124,28 +178,31 @@ async fn main() -> io::Result<()> {
         // c = c + 1;
         // println!("{}", i);
         // pool.execute(|| { 
-        // let counter = Arc::clone(&counter);
+        let locker = Arc::clone(&counter);
         if i == 0 {
             let handle = thread::spawn(move || {
                 // println!("before task");
                 // *counter.lock().unwrap() += 1;
-                sleep(Duration::from_secs(1));
                 println!("Start counter");
-                let mut last = 0;
-                let client = redis::Client::open(REDIS_URL).unwrap();
+                sleep(Duration::from_secs(1));
+                // let mut last = 0;
+                // let client = redis::Client::open(REDIS_URL).unwrap();
                 loop {
                     // let (tx, rx) = ntex::channel::oneshot::channel::<i32>();
                     // drop(rx);
-                    let mut con = client.get_connection().unwrap();
+                    // let mut con = client.get_connection().unwrap();
                     // let tmp = *counter.lock().unwrap();
-                    let tmp = con.get("counter").unwrap();
-                    println!("counter: {}, D: {}", tmp, tmp-last);
+                    // let tmp = con.get("counter").unwrap();
+                    // println!("counter: {}, D: {}", tmp, tmp-last);
                     //redis::cmd("INCR").arg("counter").arg(tmp).query::<i32>(&mut con).unwrap();
                     // tx.send(tmp).unwrap();
                     // tx.send(tmp).unwrap();
                     // drop(tx);
-                    last = tmp;
-                    sleep(Duration::from_secs(1));
+                    // last = tmp;
+                    let c = *locker.lock().unwrap();
+                    // (8u8 as char) 会在原本基础上累加
+                    print!("Counter: {}\r", c.if_supports_color(Stream::Stdout, |text| text.green()));
+                    sleep(Duration::from_millis(args.interval));
                 }
                 // println!("after");
             });
@@ -155,7 +212,7 @@ async fn main() -> io::Result<()> {
                 // println!("before task");
                 // *counter.lock().unwrap() += 1;
                 //task(i, counter);
-                task(i);
+                task(i, args.max_run, args.pass_len, locker);
                 // println!("after");
             });
             handles.push(handle);
@@ -194,17 +251,13 @@ async fn main() -> io::Result<()> {
     //     .await
     
 
-    HttpServer::new(|| {
+    HttpServer::new(move || {
+        // let locker = Arc::clone(&counter);
         App::new()
+            .state(MyState { counter: counter.clone() })
             .wrap(middleware::Logger::default())
-            .service(web::resource("/").to(|| async { 
-                let client = redis::Client::open(REDIS_URL).unwrap();
-                let mut con = client.get_connection().unwrap();
-                let tmp: i32 = con.get("counter").unwrap();
-                let mut s = String::new();
-                write!(s, "counter: {}", tmp).unwrap();
-                s
-            }))
+            .service(
+                web::resource("/").route(web::get().to(http_index)))
     })
     .bind("0.0.0.0:3080")?
     .client_timeout(Seconds(1))

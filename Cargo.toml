@@ -19,4 +19,6 @@ tiny-keccak = { version = "2.0", features = ["sha3"] }
 rand = "0.8.5"
 log = "0.4"
 env_logger = "0.9"
-redis = "0.21.5"
+# redis = "0.21.5"
+clap = { version = "4.1.1", features = ["derive"] }
+owo-colors = { version = "3.5.0", features = ["supports-colors"] }
